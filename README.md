@@ -102,6 +102,31 @@ Before queueing payout:
 - Verify no duplicate/alt claims for the same action.
 - Post pending ID + tx hash in an issue comment for auditability.
 
+### Quality Gate Scorecard
+
+For consistent payout decisions, maintainers should score accepted submissions:
+
+| Dimension | Description | Range |
+|---|---|---|
+| Impact | Meaningful user/network value | 0-5 |
+| Correctness | Works as intended, no regressions | 0-5 |
+| Evidence | Proof links, logs, before/after data | 0-5 |
+| Craft | Readable changes, tests/docs where relevant | 0-5 |
+
+Suggested payout gate:
+- minimum total: `13/20`
+- `Correctness` must be greater than `0`
+
+Global disqualifiers:
+- AI slop or template-only output
+- duplicate/noise submissions
+- missing proof links
+- repeated low-effort near-identical content
+
+For bounties over `30 RTC`, staged payout is recommended:
+- `60%` on merge acceptance
+- `40%` after a short stability window (no rollback/regression)
+
 Automation:
 - `scripts/auto_triage_claims.py` builds a recurring triage report.
 - `.github/workflows/auto-triage-claims.yml` updates the payout ledger issue block.

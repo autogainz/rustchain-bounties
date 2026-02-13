@@ -69,3 +69,45 @@ body:
         - File: /root/rustchain/...
         - Docs: ...
         - Related issue: #...
+
+  - type: textarea
+    id: quality_gate
+    attributes:
+      label: Quality Gate Scorecard (0-5 each)
+      description: Used by maintainers during payout review.
+      placeholder: |
+        Scoring dimensions:
+        - Impact (0-5):
+        - Correctness (0-5):
+        - Evidence (0-5):
+        - Craft (0-5):
+
+        Suggested gate:
+        - Minimum total: 13/20
+        - Correctness must be > 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: disqualifiers
+    attributes:
+      label: Global Disqualifiers
+      description: Submissions matching these can be rejected with no payout.
+      placeholder: |
+        - AI slop / template-only output
+        - Duplicate or noisy submissions
+        - Missing proof links or validation evidence
+        - Repeated low-effort near-identical content
+    validations:
+      required: true
+
+  - type: dropdown
+    id: payout_mode
+    attributes:
+      label: Payout Mode
+      description: For higher-value bounties, staged payout is recommended.
+      options:
+        - "Single payout on merge"
+        - "Staged payout (60% on merge, 40% after stability window)"
+    validations:
+      required: true
