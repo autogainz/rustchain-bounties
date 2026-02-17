@@ -9,6 +9,22 @@ body:
         ## New RTC Bounty
         Fill in the details below to post a bounty.
 
+        ---
+
+        ### About RTC Wallets
+
+        **RTC wallets are simple string names**, not blockchain addresses.
+        Pick any name you like: `my-cool-wallet`, `alice`, `builder-fred`, etc.
+
+        Start mining: `pip install clawrtc && clawrtc --wallet your-name`
+
+        **Do NOT submit ETH, SOL, or ERG addresses as your wallet.**
+        Those chains (Solana wRTC, Ergo anchoring) exist for bridging INTO the RTC economy — not for cashing out.
+        RustChain is a long-term project. Bounties exist to grow and support the ecosystem, not for quick dumps.
+        If you are here to build, welcome. If you are here to flip, this is not the project for you.
+
+        ---
+
   - type: textarea
     id: goal
     attributes:
@@ -98,6 +114,7 @@ body:
         - Duplicate or noisy submissions
         - Missing proof links or validation evidence
         - Repeated low-effort near-identical content
+        - Submitting ETH/SOL/ERG addresses instead of RTC wallet names
     validations:
       required: true
 
