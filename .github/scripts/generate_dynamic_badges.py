@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
-"""Dynamic Shields Badges v2 - Generate shields.io endpoint JSON badges from XP_TRACKER.md.
+"""Generate shields.io endpoint JSON badges from XP_TRACKER.md (v2).
 
-Enhanced version with:
+New features in v2:
 - Weekly growth badge
-- Top 3 hunters summary badges
+- Top 3 hunters summary badge
 - Category badges (docs/outreach/bug)
-- Collision-safe per-hunter slugs
-- README snippets for badge usage
+- Improved per-hunter badge JSON with collision-safe slugs
+- README snippets for copying badges
 
-Usage:
-    python .github/scripts/generate_dynamic_badges.py --tracker XP_TRACKER.md --out-dir badges
+Outputs:
+- badges/hunter-stats.json
+- badges/top-hunter.json
+- badges/active-hunters.json
+- badges/legendary-hunters.json
+- badges/updated-at.json
+- badges/weekly-growth.json (NEW)
+- badges/top-3-hunters.json (NEW)
+- badges/categories/ (NEW)
+- badges/hunters/<hunter>.json (per hunter - IMPROVED slugs)
+- badges/README_SNIPPETS.md (NEW)
 """
 
 from __future__ import annotations
@@ -19,54 +28,68 @@ import datetime as dt
 import json
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
-from collections import defaultdict
+from typing import Dict, List, Optional, Tuple
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Generate dynamic shields.io badges from XP tracker"
-    )
-    parser.add_argument(
-        "--tracker", 
-        default="bounties/XP_TRACKER.md",
-        help="Path to XP_TRACKER.md file"
-    )
-    parser.add_argument(
-        "--out-dir", 
-        default="badges",
-        help="Output directory for badge JSON files"
-    )
-    parser.add_argument(
-        "--generate-readme",
-        action="store_true",
-        help="Generate README snippet with badge URLs"
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tracker", default="bounties/XP_TRACKER.md")
+    parser.add_argument("--out-dir", default="badges")
+    parser.add_argument("--previous-xp", type=int, default=0,
+                        help="Total XP from previous week for growth calculation")
     return parser.parse_args()
 
 
 def parse_int(value: str) -> int:
-    """Extract integer from string."""
     match = re.search(r"\d+", value or "")
     return int(match.group(0)) if match else 0
 
 
-def slugify_hunter(hunter: str) -> str:
-    """Create collision-safe slug from hunter name."""
-    value = hunter.lstrip("@").strip().lower()
-    value = re.sub(r"[^a-z0-9._-]+", "-", value)
-    value = re.sub(r"-+", "-", value)
-    value = value.strip("-.")
-    return value or "unknown"
+def extract_badges_earned(badges_cell: str) -> List[str]:
+    """Extract badge names from the markdown cell."""
+    badges = []
+    # Match alt text in markdown images
+    pattern = r'!\[([^\]]+)\]\([^)]+\)'
+    matches = re.findall(pattern, badges_cell)
+    for match in matches:
+        badges.append(match.strip())
+    return badges
 
 
-def parse_xp_tracker(md_text: str) -> List[Dict[str, object]]:
-    """Parse hunter data from XP_TRACKER.md table."""
+def categorize_badges(badges: List[str]) -> Dict[str, int]:
+    """Categorize badges into docs, outreach, bug based on badge names."""
+    categories = {
+        "docs": 0,
+        "outreach": 0,
+        "bug": 0,
+        "other": 0
+    }
+    
+    badge_categories = {
+        "docs": ["tutorial", "guide", "documentation", "writer"],
+        "outreach": ["star", "fork", "share", "follow", "social", "community"],
+        "bug": ["bug", "slayer", "fix", "issue"]
+    }
+    
+    for badge in badges:
+        badge_lower = badge.lower()
+        categorized = False
+        for category, keywords in badge_categories.items():
+            if any(keyword in badge_lower for keyword in keywords):
+                categories[category] += 1
+                categorized = True
+                break
+        if not categorized:
+            categories["other"] += 1
+    
+    return categories
+
+
+def parse_rows(md_text: str) -> List[Dict[str, object]]:
     lines = md_text.splitlines()
     header_idx = -1
-    
     for i, line in enumerate(lines):
-        if "| Hunter" in line or "| Rank | Hunter" in line:
+        if line.strip().startswith("| Rank | Hunter"):
             header_idx = i
             break
 
@@ -75,7 +98,6 @@ def parse_xp_tracker(md_text: str) -> List[Dict[str, object]]:
 
     rows: List[Dict[str, object]] = []
     i = header_idx + 2
-    
     while i < len(lines) and lines[i].strip().startswith("|"):
         line = lines[i].strip()
         if line.startswith("|---"):
@@ -83,364 +105,289 @@ def parse_xp_tracker(md_text: str) -> List[Dict[str, object]]:
             continue
 
         cells = [cell.strip() for cell in line.split("|")[1:-1]]
-        if len(cells) < 4:
+        if len(cells) < 9:
             i += 1
             continue
 
-        hunter = cells[1] if "Rank" in lines[header_idx] else cells[0]
-        if hunter == "_TBD_" or not hunter or hunter.startswith("--"):
+        hunter = cells[1]
+        if hunter == "_TBD_":
             i += 1
             continue
 
-        xp_idx = 3 if "Rank" in lines[header_idx] else 2
-        level_idx = 4 if "Rank" in lines[header_idx] else 3
-        
+        # Extract badges and categorize them
+        badges_earned = extract_badges_earned(cells[6])
+        category_counts = categorize_badges(badges_earned)
+
         row = {
-            "rank": parse_int(cells[0]) if "Rank" in lines[header_idx] else 0,
+            "rank": parse_int(cells[0]),
             "hunter": hunter,
-            "wallet": cells[2] if len(cells) > 2 else "",
-            "xp": parse_int(cells[xp_idx]) if len(cells) > xp_idx else 0,
-            "level": parse_int(cells[level_idx]) if len(cells) > level_idx else 1,
-            "title": cells[5] if len(cells) > 5 else "Hunter",
-            "slug": slugify_hunter(hunter),
+            "wallet": cells[2],
+            "xp": parse_int(cells[3]),
+            "level": parse_int(cells[4]),
+            "title": cells[5],
+            "badges_earned": badges_earned,
+            "category_counts": category_counts,
+            "last_action": cells[7],
+            "notes": cells[8] if len(cells) > 8 else "",
         }
         rows.append(row)
         i += 1
 
     rows.sort(key=lambda item: (-int(item["xp"]), str(item["hunter"]).lower()))
-    
     for idx, row in enumerate(rows, start=1):
         row["rank"] = idx
-    
     return rows
 
 
-def parse_ledger_for_weekly_data(md_text: str) -> Dict[str, int]:
-    """Extract weekly bounty completions from ledger format."""
-    weekly_counts = defaultdict(int)
-    date_pattern = re.compile(r"(\d{4}-\d{2}-\d{2})")
-    
-    for line in md_text.splitlines():
-        match = date_pattern.search(line)
-        if match:
-            date_str = match.group(1)
-            date = dt.datetime.strptime(date_str, "%Y-%m-%d")
-            week_key = date.strftime("%Y-W%W")
-            weekly_counts[week_key] += 1
-    
-    return dict(weekly_counts)
+def color_for_level(level: int) -> str:
+    if level >= 10:
+        return "gold"
+    if level >= 7:
+        return "purple"
+    if level >= 5:
+        return "yellow"
+    if level >= 4:
+        return "orange"
+    return "blue"
 
 
-def write_badge(
-    path: Path,
-    label: str,
-    message: str,
-    color: str = "blue",
-    style: str = "flat",
-    is_error: bool = False,
-    named_logo: Optional[str] = None,
-    cache_seconds: int = 3600,
-) -> None:
-    """Write a shields.io endpoint badge JSON file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+def slugify_hunter(hunter: str) -> str:
+    """Create collision-safe slug from hunter name.
     
-    badge = {
+    Rules:
+    - Remove @ prefix
+    - Lowercase
+    - Replace non-alphanumeric with single hyphen
+    - Collapse multiple hyphens
+    - Strip leading/trailing hyphens
+    - Max 50 chars
+    """
+    value = hunter.lstrip("@").strip().lower()
+    value = re.sub(r"[^a-z0-9._-]+", "-", value)
+    value = re.sub(r"-+", "-", value)  # Collapse multiple hyphens
+    value = value.strip("-")
+    return value[:50] or "unknown"
+
+
+def write_badge(path: Path, label: str, message: str, color: str,
+                named_logo: str = "github", logo_color: str = "white") -> None:
+    payload = {
         "schemaVersion": 1,
         "label": label,
         "message": message,
         "color": color,
-        "style": style,
-        "isError": is_error,
-        "cacheSeconds": cache_seconds,
+        "namedLogo": named_logo,
+        "logoColor": logo_color,
     }
-    
-    if named_logo:
-        badge["namedLogo"] = named_logo
-    
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(badge, f, indent=2)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def get_level_color(level: int) -> str:
-    """Get color based on hunter level."""
-    colors = {
-        1: "lightgrey",
-        2: "green",
-        3: "yellowgreen",
-        4: "yellow",
-        5: "orange",
-        6: "red",
-        7: "brightgreen",
-        8: "blue",
-        9: "purple",
-        10: "gold",
-    }
-    return colors.get(min(level, 10), "blue")
+def generate_readme_snippets(out_dir: Path, hunter_slugs: Dict[str, str]) -> str:
+    """Generate README snippets for copying badges."""
+    snippets = """# Badge Snippets for README
 
+Copy and paste these snippets into your README files.
 
-def generate_hunter_badges(rows: List[Dict], out_dir: Path) -> None:
-    """Generate per-hunter XP badges."""
-    for row in rows:
-        slug = str(row["slug"])
-        badge_path = out_dir / "hunters" / f"{slug}.json"
-        
-        write_badge(
-            badge_path,
-            label=f"@{str(row['hunter']).lstrip('@')[:12]}",
-            message=f"{row['xp']} XP",
-            color=get_level_color(int(row.get("level", 1))),
-            named_logo="github" if "github" in str(row.get("wallet", "")).lower() else None,
-        )
+## Global Stats Badges
 
-
-def generate_top_hunters_badges(rows: List[Dict], out_dir: Path) -> None:
-    """Generate top 3 hunters summary badges."""
-    sorted_rows = sorted(rows, key=lambda x: -int(x["xp"]))[:3]
-    
-    for idx, row in enumerate(sorted_rows, start=1):
-        badge_path = out_dir / f"top-{idx}.json"
-        medals = ["🥇", "🥈", "🥉"]
-        
-        write_badge(
-            badge_path,
-            label=f"#{idx} Hunter",
-            message=f"@{str(row['hunter']).lstrip('@')[:12]} • {row['xp']} XP",
-            color="gold" if idx == 1 else "silver" if idx == 2 else "orange",
-            named_logo="trophy" if idx == 1 else None,
-        )
-    
-    # Combined top 3 badge
-    if len(sorted_rows) >= 3:
-        names = [str(r["hunter"]).lstrip("@")[:8] for r in sorted_rows]
-        combined_path = out_dir / "top-3-summary.json"
-        write_badge(
-            combined_path,
-            label="Top 3 Hunters",
-            message=" • ".join(names),
-            color="success",
-        )
-
-
-def generate_category_badges(rows: List[Dict], out_dir: Path) -> None:
-    """Generate category-based badges (requires category data)."""
-    categories = {
-        "docs": 0,
-        "outreach": 0,
-        "bug": 0,
-    }
-    
-    for row in rows:
-        title = str(row.get("title", "")).lower()
-        if "doc" in title or "scribe" in title:
-            categories["docs"] += 1
-        if "outreach" in title or "advocate" in title or "ambassador" in title:
-            categories["outreach"] += 1
-        if "bug" in title or "hunter" in title and "bug" in title:
-            categories["bug"] += 1
-    
-    for cat, count in categories.items():
-        badge_path = out_dir / f"category-{cat}.json"
-        color_map = {"docs": "informational", "outreach": "blueviolet", "bug": "critical"}
-        write_badge(
-            badge_path,
-            label=f"{cat.title()}",
-            message=f"{count} hunters",
-            color=color_map.get(cat, "blue"),
-        )
-
-
-def generate_weekly_growth_badge(rows: List[Dict], out_dir: Path) -> None:
-    """Generate weekly growth indicator badge."""
-    current_week = dt.datetime.utcnow().strftime("%Y-W%W")
-    new_hunters_this_week = sum(1 for r in rows if r.get("level", 1) == 1)
-    
-    badge_path = out_dir / "weekly-growth.json"
-    write_badge(
-        badge_path,
-        label="Weekly Growth",
-        message=f"+{new_hunters_this_week} new",
-        color="success" if new_hunters_this_week > 0 else "lightgrey",
-    )
-    
-    # Week identifier badge
-    week_path = out_dir / "current-week.json"
-    write_badge(
-        week_path,
-        label="Week",
-        message=current_week,
-        color="blue",
-    )
-
-
-def generate_readme_snippet(rows: List[Dict], out_dir: Path) -> str:
-    """Generate README snippet with badge embed examples."""
-    readme_path = out_dir / "README.md"
-    
-    repo_url = "https://github.com/Scottcjn/rustchain-bounties"
-    
-    content = f"""# 🏆 RustChain Bounties Badges
-
-Auto-generated shields.io badges from XP tracker data.
-
-## Global Badges
-
-### Total Hunters
 ```markdown
-![Total Hunters](https://img.shields.io/endpoint?url={repo_url}/raw/main/badges/total-hunters.json)
+![Hunter Stats](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Scottcjn/rustchain-bounties/main/badges/hunter-stats.json)
+![Top Hunter](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Scottcjn/rustchain-bounties/main/badges/top-hunter.json)
+![Active Hunters](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Scottcjn/rustchain-bounties/main/badges/active-hunters.json)
+![Legendary Hunters](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Scottcjn/rustchain-bounties/main/badges/legendary-hunters.json)
+![Weekly Growth](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Scottcjn/rustchain-bounties/main/badges/weekly-growth.json)
+![Updated](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Scottcjn/rustchain-bounties/main/badges/updated-at.json)
 ```
-
-### Weekly Growth
-```markdown
-![Weekly Growth](https://img.shields.io/endpoint?url={repo_url}/raw/main/badges/weekly-growth.json)
-```
-
-### Top Hunter
-```markdown
-![Top Hunter](https://img.shields.io/endpoint?url={repo_url}/raw/main/badges/top-hunter.json)
-```
-
-## Top 3 Hunters
-
-| Rank | Badge |
-|------|-------|
-| 🥇 #1 | `![#1 Hunter](https://img.shields.io/endpoint?url={repo_url}/raw/main/badges/top-1.json)` |
-| 🥈 #2 | `![#2 Hunter](https://img.shields.io/endpoint?url={repo_url}/raw/main/badges/top-2.json)` |
-| 🥉 #3 | `![#3 Hunter](https://img.shields.io/endpoint?url={repo_url}/raw/main/badges/top-3.json)` |
-
-## Per-Hunter Badges
-
-### Your Personal Badge
-```markdown
-![My XP](https://img.shields.io/endpoint?url={repo_url}/raw/main/badges/hunters/YOUR_USERNAME.json)
-```
-
-**Available hunter slugs:**
-"""
-    
-    for row in rows[:20]:
-        content += f"- `{row['slug']}` — @{row['hunter']}\n"
-    
-    if len(rows) > 20:
-        content += f"- ...and {len(rows) - 20} more (see `badges/hunters/` directory)\n"
-    
-    content += f"""
 
 ## Category Badges
 
 ```markdown
-![Docs Hunters](https://img.shields.io/endpoint?url={repo_url}/raw/main/badges/category-docs.json)
-![Outreach Hunters](https://img.shields.io/endpoint?url={repo_url}/raw/main/badges/category-outreach.json)
-![Bug Hunters](https://img.shields.io/endpoint?url={repo_url}/raw/main/badges/category-bug.json)
+![Docs Bounties](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Scottcjn/rustchain-bounties/main/badges/categories/docs.json)
+![Outreach Bounties](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Scottcjn/rustchain-bounties/main/badges/categories/outreach.json)
+![Bug Bounties](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Scottcjn/rustchain-bounties/main/badges/categories/bug.json)
 ```
 
-## Embedding in Your Profile
-
-Add badges to your GitHub profile README or external sites:
+## Top 3 Hunters Badge
 
 ```markdown
-## My RustChain Bounty Stats
-
-![My XP](https://img.shields.io/endpoint?url={repo_url}/raw/main/badges/hunters/YOUR_SLUG.json)
-![Top Hunter](https://img.shields.io/endpoint?url={repo_url}/raw/main/badges/top-hunter.json)
+![Top 3 Hunters](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Scottcjn/rustchain-bounties/main/badges/top-3-hunters.json)
 ```
 
----
-
-*Last updated: {dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}*
+## Per-Hunter Badges
 """
     
-    with open(readme_path, "w", encoding="utf-8") as f:
-        f.write(content)
+    for hunter, slug in sorted(hunter_slugs.items()):
+        clean_name = hunter.lstrip("@")
+        snippets += f"""
+### {clean_name}
+
+```markdown
+![{clean_name} XP](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Scottcjn/rustchain-bounties/main/badges/hunters/{slug}.json)
+```
+"""
     
-    return str(readme_path)
+    return snippets
 
 
 def main() -> None:
     args = parse_args()
     tracker_path = Path(args.tracker)
     out_dir = Path(args.out_dir)
-    
+
     if not tracker_path.exists():
-        print(f"Error: Tracker file not found: {tracker_path}")
-        return
-    
+        raise SystemExit(f"tracker not found: {tracker_path}")
+
     md_text = tracker_path.read_text(encoding="utf-8")
-    rows = parse_xp_tracker(md_text)
+    rows = parse_rows(md_text)
+
+    total_xp = sum(int(row["xp"]) for row in rows)
+    active_hunters = len(rows)
+    legendary = sum(1 for row in rows if int(row["level"]) >= 10)
     
-    if not rows:
-        print("Warning: No hunter data found in tracker file")
-        return
+    # Calculate weekly growth
+    weekly_growth = total_xp - args.previous_xp if args.previous_xp > 0 else 0
+    growth_percent = round((weekly_growth / args.previous_xp) * 100, 1) if args.previous_xp > 0 else 0
     
-    print(f"📊 Found {len(rows)} hunters")
-    
-    # Global badges
-    total_xp = sum(int(r["xp"]) for r in rows)
-    active_hunters = len([r for r in rows if int(r["xp"]) > 0])
-    legendary = len([r for r in rows if int(r.get("level", 1)) >= 10])
-    
+    # Aggregate category counts across all hunters
+    total_categories = {"docs": 0, "outreach": 0, "bug": 0, "other": 0}
+    for row in rows:
+        cats = row.get("category_counts", {})
+        for key in total_categories:
+            total_categories[key] += cats.get(key, 0)
+
+    if rows:
+        top = rows[0]
+        top_name = str(top["hunter"]).lstrip("@")
+        top_msg = f"{top_name} ({top['xp']} XP)"
+    else:
+        top_msg = "none yet"
+
+    # Write standard badges
     write_badge(
-        out_dir / "total-xp.json",
-        label="Total XP",
-        message=f"{total_xp:,}",
-        color="brightgreen",
+        out_dir / "hunter-stats.json",
+        label="Bounty Hunter XP",
+        message=f"{total_xp} total",
+        color="orange" if total_xp > 0 else "blue",
     )
-    
+
     write_badge(
-        out_dir / "total-hunters.json",
-        label="Hunters",
-        message=f"{len(rows)}",
-        color="blue",
+        out_dir / "top-hunter.json",
+        label="Top Hunter",
+        message=top_msg,
+        color="gold" if rows else "lightgrey",
     )
-    
+
     write_badge(
         out_dir / "active-hunters.json",
         label="Active Hunters",
-        message=f"{active_hunters}",
-        color="success" if active_hunters > 0 else "inactive",
+        message=str(active_hunters),
+        color="success",
     )
-    
+
     write_badge(
         out_dir / "legendary-hunters.json",
         label="Legendary Hunters",
-        message=f"{legendary}",
+        message=str(legendary),
         color="gold" if legendary > 0 else "lightgrey",
     )
+
+    # Write weekly growth badge (NEW)
+    if weekly_growth > 0:
+        growth_color = "brightgreen" if growth_percent > 50 else "green" if growth_percent > 10 else "yellow"
+        growth_message = f"+{weekly_growth} XP ({growth_percent}%)"
+    else:
+        growth_color = "lightgrey"
+        growth_message = "no change" if args.previous_xp > 0 else "baseline"
     
     write_badge(
-        out_dir / "updated-at.json",
-        label="Updated",
-        message=dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-        color="blue",
-        cache_seconds=300,
+        out_dir / "weekly-growth.json",
+        label="Weekly Growth",
+        message=growth_message,
+        color=growth_color,
     )
+
+    # Write top 3 hunters summary badge (NEW)
+    top_3_names = []
+    for row in rows[:3]:
+        name = str(row["hunter"]).lstrip("@")
+        xp = row["xp"]
+        top_3_names.append(f"{name} ({xp})")
     
-    # Top hunter badge
-    if rows:
-        top = rows[0]
-        top_name = str(top["hunter"]).lstrip("@")[:12]
+    top_3_message = " | ".join(top_3_names) if top_3_names else "No hunters yet"
+    write_badge(
+        out_dir / "top-3-hunters.json",
+        label="Top 3 Hunters",
+        message=top_3_message[:100],  # Keep it reasonably short
+        color="gold",
+    )
+
+    # Write category badges (NEW)
+    categories = [
+        ("docs", "Documentation", "blue", total_categories["docs"]),
+        ("outreach", "Outreach", "green", total_categories["outreach"]),
+        ("bug", "Bug Reports", "red", total_categories["bug"]),
+        ("other", "Other", "lightgrey", total_categories["other"]),
+    ]
+    
+    for cat_id, cat_label, cat_color, cat_count in categories:
+        cat_message = f"{cat_count} badges" if cat_count > 0 else "0 badges"
         write_badge(
-            out_dir / "top-hunter.json",
-            label="Top Hunter",
-            message=f"@{top_name} ({top['xp']} XP)",
-            color="gold",
-            named_logo="trophy",
+            out_dir / "categories" / f"{cat_id}.json",
+            label=cat_label,
+            message=cat_message,
+            color=cat_color,
         )
+
+    # Write updated-at badge
+    now = dt.datetime.now(dt.timezone.utc)
+    write_badge(
+        out_dir / "updated-at.json",
+        label="Badges Updated",
+        message=now.strftime("%Y-%m-%d %H:%M UTC"),
+        color="informational",
+    )
+
+    # Write per-hunter badges (IMPROVED with collision-safe slugs)
+    hunter_slugs: Dict[str, str] = {}
+    seen_slugs: Dict[str, int] = {}
     
-    # V2 badges
-    generate_weekly_growth_badge(rows, out_dir)
-    generate_top_hunters_badges(rows, out_dir)
-    generate_category_badges(rows, out_dir)
-    generate_hunter_badges(rows, out_dir)
-    
-    # Generate README
-    if args.generate_readme or True:
-        readme = generate_readme_snippet(rows, out_dir)
-        print(f"📝 Generated README at {readme}")
-    
-    print(f"✅ Generated {len(rows) + 9} badges in {out_dir}/")
-    print(f"   - Global badges: 7")
-    print(f"   - Per-hunter badges: {len(rows)}")
-    print(f"   - Category badges: up to 4")
+    for row in rows:
+        hunter_name = str(row["hunter"])
+        base_slug = slugify_hunter(hunter_name)
+        
+        # Handle collisions
+        if base_slug in seen_slugs:
+            seen_slugs[base_slug] += 1
+            slug = f"{base_slug}-{seen_slugs[base_slug]}"
+        else:
+            seen_slugs[base_slug] = 0
+            slug = base_slug
+        
+        hunter_slugs[hunter_name] = slug
+        
+        hunter_path = out_dir / "hunters" / f"{slug}.json"
+        write_badge(
+            hunter_path,
+            label=hunter_name.lstrip("@"),
+            message=f"{row['xp']} XP (Lv{row['level']})",
+            color=color_for_level(int(row["level"])),
+        )
+
+    # Write README snippets file (NEW)
+    snippets = generate_readme_snippets(out_dir, hunter_slugs)
+    snippets_path = out_dir / "README_SNIPPETS.md"
+    snippets_path.write_text(snippets, encoding="utf-8")
+
+    # Summary output
+    print(f"Generated badges for {len(rows)} hunters")
+    print(f"Total XP: {total_xp}")
+    print(f"Weekly Growth: {weekly_growth} XP ({growth_percent}%)")
+    print(f"Categories: docs={total_categories['docs']}, outreach={total_categories['outreach']}, bug={total_categories['bug']}")
+    print(f"Output directory: {out_dir}")
+    print(f"\nHunter slugs (collision-safe):")
+    for hunter, slug in sorted(hunter_slugs.items()):
+        print(f"  {hunter} -> {slug}")
 
 
 if __name__ == "__main__":
